@@ -1,0 +1,14 @@
+{
+  "name": "jarvis-backend",
+  "version": "1.0.0",
+  "description": "JARVIS AI Backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "groq-sdk": "^0.17.0"
+  }
+}
