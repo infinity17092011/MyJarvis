@@ -1,80 +1,75 @@
+// server.js — keeps your Groq key on the backend and returns structured JSON
+require("dotenv").config();
 const express = require("express");
-const cors = require("cors");
-const Groq = require("groq-sdk");
+const path = require("path");
 
 const app = express();
+const PORT = process.env.PORT || 3000;
+const MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-20b"; // check Groq's model list
+const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
-app.use(cors());
-app.use(express.json());
-
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY
+// Allow the frontend to call this backend from another origin
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", process.env.ALLOWED_ORIGIN || "*");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
 });
 
-app.get("/", (req, res) => {
-  res.json({
-    status: "online",
-    assistant: "JARVIS"
-  });
-});
+app.use(express.json({ limit: "200kb" }));
+app.use(express.static(path.join(__dirname, "public")));
 
-app.post("/chat", async (req, res) => {
+const SYSTEM_PROMPT = `You summarise a student's notes. Reply with ONLY a JSON object, no prose, in this exact shape:
+{
+  "summary": "3-5 sentences in plain language",
+  "keywords": ["5-10 important terms"],
+  "definitions": [{"term": "...", "definition": "one clear sentence"}],
+  "flashcards": [{"q": "...", "a": "..."}]
+}
+Rules: use only information from the notes, define 3-8 terms, write 3-6 flashcards, never ask questions back, never add commentary.`;
+
+app.post("/api/summarise", async (req, res) => {
+  const notes = (req.body.notes || "").trim();
+  if (notes.length < 20) {
+    return res.status(400).json({ error: "Add a bit more text (at least 20 characters)." });
+  }
+  if (!process.env.GROQ_API_KEY) {
+    return res.status(500).json({ error: "Server is missing GROQ_API_KEY." });
+  }
+
   try {
-    const { message } = req.body;
+    const r = await fetch(GROQ_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        temperature: 0.3,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: notes },
+        ],
+      }),
+    });
 
-    if (!message) {
-      return res.status(400).json({
-        error: "Message is required"
-      });
+    if (!r.ok) {
+      const detail = await r.text();
+      console.error("Groq error:", r.status, detail);
+      return res.status(502).json({ error: "The AI service returned an error. Try again." });
     }
 
-    const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      temperature: 0.7,
-      messages: [
-        {
-          role: "system",
-          content: `
-You are JARVIS.
-
-You are an advanced AI assistant inspired by Tony Stark's JARVIS.
-
-Rules:
-- Be intelligent.
-- Be concise.
-- Be helpful.
-- Be professional.
-- Occasionally address the user as "Sir".
-- Never mention being ChatGPT.
-- Act like a futuristic AI assistant.
-`
-        },
-        {
-          role: "user",
-          content: message
-        }
-      ]
-    });
-
-    const reply = completion.choices[0].message.content;
-
-    res.json({
-      success: true,
-      reply
-    });
-
-  } catch (error) {
-    console.error(error);
-
-    res.status(500).json({
-      success: false,
-      error: "Internal server error"
-    });
+    const data = await r.json();
+    const raw = data.choices?.[0]?.message?.content || "";
+    const result = JSON.parse(raw.replace(/```json|```/g, "").trim());
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Couldn't read the AI response. Try again." });
   }
 });
 
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log(`JARVIS online on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Running on http://localhost:${PORT}`));
